@@ -812,8 +812,14 @@ export class IncrementalGenerationService {
 
       // Execute based on request type
       switch (request.requestType) {
-        case 'add_class':
-          return await this.executeClassAddition(requestId, request.changeDetails, options);
+        case 'add_class': {
+          // The class was already created when the request was made; run the rest of the addition now
+          const newClass = request.entityId ? await storage.getClass(request.entityId) : undefined;
+          if (!newClass) {
+            throw new Error("The class for this request no longer exists");
+          }
+          return await this.executeClassAdditionWorkflow(requestId, newClass, { ...request.changeDetails, schoolId: request.schoolId }, options);
+        }
         
         case 'update_subject':
           return await this.executeSubjectUpdate(

@@ -400,9 +400,56 @@ async function executeLightweightBulkGeneration(schoolId: string, classes: any[]
   }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isValidUuid = (value: unknown) => typeof value === 'string' && UUID_PATTERN.test(value);
+const isValidDateParam = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !isNaN(Date.parse(value));
+
+async function hostelAndStudentInSchool(hostelId: string, studentId: string, schoolId: string): Promise<boolean> {
+  const [hostel, student] = await Promise.all([storage.getHostel(hostelId), storage.getStudent(studentId)]);
+  return hostel?.schoolId === schoolId && student?.schoolId === schoolId;
+}
+
+// Students linked to a parent login (empty for anyone else)
+async function parentChildIds(user: any): Promise<string[]> {
+  if (user?.role !== 'parent' || !user.parentId) return [];
+  const links = await db
+    .select({ studentId: studentParents.studentId })
+    .from(studentParents)
+    .where(eq(studentParents.parentId, user.parentId));
+  return links.map(link => link.studentId);
+}
+
+// Personal teacher details (ID numbers, home address, birth date...) are only for school admins and the teacher themselves
+const TEACHER_PRIVATE_FIELDS = ["aadhar", "dateOfBirth", "fatherHusbandName", "address", "category", "religion", "bloodGroup", "contactNumber", "schoolIdNumber"];
+
+function teacherViewFor(user: any, teacher: any) {
+  if (user?.role === 'admin' || user?.role === 'super_admin' || user?.teacherId === teacher.id) {
+    return teacher;
+  }
+  const publicView = { ...teacher };
+  for (const field of TEACHER_PRIVATE_FIELDS) delete publicView[field];
+  return publicView;
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup custom authentication
   setupCustomAuth(app);
+
+  // Hostel management (rooms, allocations, fees) is an admin-only module
+  app.use(["/api/hostels", "/api/hostel-rooms", "/api/hostel-allocations", "/api/hostel-fees"], authMiddleware, async (req: any, res, next) => {
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({ message: "Access denied. Admin required." });
+    }
+    // /api/hostels/:id/... - the hostel must belong to the admin's school
+    const hostelId = req.baseUrl === "/api/hostels" ? req.path.split("/")[1] : undefined;
+    if (req.user.role === 'admin' && hostelId && isValidUuid(hostelId)) {
+      const hostel = await storage.getHostel(hostelId);
+      if (hostel && hostel.schoolId !== req.user.schoolId) {
+        return res.status(404).json({ message: "Hostel not found" });
+      }
+    }
+    next();
+  });
 
   // Serve sample templates
   app.use('/sample-templates', express.static('public/sample-templates'));
@@ -1106,6 +1153,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // A single school's details (Settings page) - school admins only see their own school
+  app.get("/api/schools/:id", authMiddleware, async (req: any, res) => {
+    try {
+      const user = req.user;
+      const isOwnSchool = user.role === 'admin' && user.schoolId === req.params.id;
+      if (user.role !== 'super_admin' && !isOwnSchool) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const school = await storage.getSchool(req.params.id);
+      if (!school) {
+        return res.status(404).json({ message: "School not found" });
+      }
+
+      // The school's OpenAI key is managed through /api/school/openai-api-key and never sent back
+      const { openaiApiKey, ...schoolDetails } = school;
+      res.json(schoolDetails);
+    } catch (error) {
+      console.error("Error fetching school:", error);
+      res.status(500).json({ message: "Failed to fetch school" });
+    }
+  });
+
   // Backfill academic sessions for existing schools (Super Admin only)
   app.post("/api/schools/backfill-sessions", authMiddleware, async (req, res) => {
     try {
@@ -1172,7 +1242,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate,
         endDate
       });
-      
+
+      // Start with the default timetable structure (8 periods, Mon-Sat) so subjects can be assigned
+      // right away; the school admin can change it in Timetable Settings
+      await storage.createTimetableStructure({ schoolId: school.id });
+
       // Create admin account if credentials provided
       if (adminEmail && adminPassword) {
         const bcrypt = await import('bcryptjs');
@@ -1457,7 +1531,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       pgDump.on('error', (error) => {
         console.error('Failed to start pg_dump:', error);
         if (!res.headersSent) {
-          res.status(500).json({ message: "Failed to export database" });
+          const notInstalled = (error as NodeJS.ErrnoException).code === 'ENOENT';
+          res.status(notInstalled ? 503 : 500).json({
+            message: notInstalled
+              ? "Database backup is unavailable: the PostgreSQL client tools (pg_dump) are not installed on this server"
+              : "Failed to export database"
+          });
         }
       });
 
@@ -2348,7 +2427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.json({
-        teachers,
+        teachers: teachers.map((teacher: any) => teacherViewFor(user, teacher)),
         totalCount
       });
     } catch (error) {
@@ -2357,13 +2436,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/teachers/:id", async (req, res) => {
+  app.get("/api/teachers/:id", authMiddleware, async (req: any, res) => {
     try {
+      const user = req.user;
       const teacher = await storage.getTeacher(req.params.id);
-      if (!teacher) {
+      if (!teacher || (user.role !== 'super_admin' && teacher.schoolId !== user.schoolId)) {
         return res.status(404).json({ message: "Teacher not found" });
       }
-      res.json(teacher);
+      res.json(teacherViewFor(user, teacher));
     } catch (error) {
       console.error("Error fetching teacher:", error);
       res.status(500).json({ message: "Failed to fetch teacher" });
@@ -3257,14 +3337,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = req.user;
       const { date, teacherId, startDate, endDate } = req.query;
       
-      // Only school admins can view attendance
-      if (user.role !== 'admin') {
+      // School admins can view attendance; teachers can view only their own
+      const isOwnAttendance = user.role === 'teacher' && !!teacherId && teacherId === user.teacherId;
+      if (user.role !== 'admin' && !isOwnAttendance) {
         return res.status(403).json({ message: "Access denied" });
       }
 
       let attendance;
-      
+
       if (teacherId) {
+        const teacher = await storage.getTeacher(teacherId as string);
+        if (!teacher || teacher.schoolId !== user.schoolId) {
+          return res.status(404).json({ message: "Teacher not found" });
+        }
         // Get attendance for specific teacher with optional date range
         attendance = await storage.getTeacherAttendanceByTeacher(teacherId as string, startDate as string, endDate as string);
       } else if (user.schoolId) {
@@ -3460,6 +3545,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/teacher-attendance/check/:teacherId/:date", authMiddleware, async (req: any, res) => {
     try {
       const { teacherId, date } = req.params;
+      if (!isValidUuid(teacherId) || !isValidDateParam(date)) {
+        return res.status(400).json({ message: "Invalid teacher or date" });
+      }
+      const teacher = await storage.getTeacher(teacherId);
+      if (!teacher || (req.user.role !== 'super_admin' && teacher.schoolId !== req.user.schoolId)) {
+        return res.status(404).json({ message: "Teacher not found" });
+      }
       const isAbsent = await storage.isTeacherAbsent(teacherId, date);
       res.json({ isAbsent });
     } catch (error) {
@@ -3759,7 +3851,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Only allow fetching own attendance, no class or school-wide queries
         attendance = await storage.getStudentAttendanceByStudent(userStudent.id, validatedQuery.startDate, validatedQuery.endDate);
-        
+
+      } else if (user.role === 'parent') {
+        // Parents can only view their own children's attendance
+        if (!validatedQuery.studentId || !(await parentChildIds(user)).includes(validatedQuery.studentId)) {
+          return res.status(403).json({ message: "Access denied: Can only view your own child's attendance" });
+        }
+        attendance = await storage.getStudentAttendanceByStudent(validatedQuery.studentId, validatedQuery.startDate, validatedQuery.endDate);
+
       } else if (user.role === 'teacher') {
         // Teachers can only view attendance for classes they are assigned to
         if (!user.teacherId) {
@@ -3967,16 +4066,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { studentId, date } = req.params;
       const user = req.user;
-      
-      // Permission check: admin/teacher can check any student, student can check themselves
-      if (user.role !== 'admin' && user.role !== 'teacher') {
-        if (user.role === 'student' && user.id !== studentId) {
-          return res.status(403).json({ message: "Access denied: Can only check your own attendance" });
-        } else if (user.role === 'parent') {
-          return res.status(403).json({ message: "Access denied: Parent access not implemented yet" });
-        }
+
+      if (!isValidUuid(studentId) || !isValidDateParam(date)) {
+        return res.status(400).json({ message: "Invalid student or date" });
       }
-      
+
+      // Permission check: admin/teacher can check students of their school, students themselves, parents their children
+      const student = await storage.getStudent(studentId);
+      if (!student || (user.role !== 'super_admin' && student.schoolId !== user.schoolId)) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      if (user.role === 'student' && user.studentId !== studentId) {
+        return res.status(403).json({ message: "Access denied: Can only check your own attendance" });
+      }
+      if (user.role === 'parent' && !(await parentChildIds(user)).includes(studentId)) {
+        return res.status(403).json({ message: "Access denied: Can only check your own child's attendance" });
+      }
+
       const isAbsent = await storage.isStudentAbsent(studentId, date);
       res.json({ isAbsent });
     } catch (error) {
@@ -4701,10 +4807,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = req.user;
       const requestedStudentId = req.params.id;
       
-      // Allow admins, super admins, or students accessing their own data
-      const isAuthorized = user.role === 'admin' || 
-                          user.role === 'super_admin' || 
-                          (user.role === 'student' && user.studentId === requestedStudentId);
+      // Allow admins, super admins, students accessing their own data, or parents accessing their child's
+      const isAuthorized = user.role === 'admin' ||
+                          user.role === 'super_admin' ||
+                          (user.role === 'student' && user.studentId === requestedStudentId) ||
+                          (user.role === 'parent' && (await parentChildIds(user)).includes(requestedStudentId));
       
       if (!isAuthorized) {
         return res.status(403).json({ message: "Access denied" });
@@ -5328,8 +5435,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const user = req.user;
       
-      // Only school admins and super admins can access parent-children relationships
-      if (user.role !== 'admin' && user.role !== 'super_admin') {
+      // School admins, super admins, and the parent themselves can access parent-children relationships
+      const isOwnParentRecord = user.role === 'parent' && user.parentId === req.params.parentId;
+      if (user.role !== 'admin' && user.role !== 'super_admin' && !isOwnParentRecord) {
         return res.status(403).json({ message: "Access denied" });
       }
 
@@ -5365,6 +5473,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Students can only view their own parents
         if (user.studentId !== req.params.studentId) {
           return res.status(403).json({ message: "Access denied: Can only view your own parents" });
+        }
+      } else if (user.role === 'parent') {
+        if (!(await parentChildIds(user)).includes(req.params.studentId)) {
+          return res.status(403).json({ message: "Access denied" });
         }
       } else if (user.role === 'admin') {
         // School admins can only access students from their school
@@ -5531,7 +5643,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/subjects/:id", authMiddleware, async (req: any, res) => {
+  app.put("/api/subjects/:id", authMiddleware, async (req: any, res, next) => {
+    // Let the fixed-path route PUT /api/subjects/default-periods (registered later) handle its own path
+    if (req.params.id === "default-periods") return next();
     try {
       const user = req.user;
       const subjectId = req.params.id;
@@ -6432,15 +6546,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = req.user;
       const classId = req.params.classId;
 
-      // Only students can access this endpoint (read-only)
-      if (user.role !== 'student') {
+      // Only students (and parents, for their child's class) can access this endpoint (read-only)
+      if (user.role === 'parent') {
+        const children = await Promise.all((await parentChildIds(user)).map(id => storage.getStudent(id)));
+        if (!children.some(child => child?.classId === classId)) {
+          return res.status(403).json({ message: "Access denied - your child is not in this class" });
+        }
+      } else if (user.role !== 'student') {
         return res.status(403).json({ message: "Access denied" });
-      }
-
-      // Verify the student belongs to this class
-      const student = await storage.getStudent(user.studentId);
-      if (!student || student.classId !== classId) {
-        return res.status(403).json({ message: "Access denied - you are not a member of this class" });
+      } else {
+        // Verify the student belongs to this class
+        const student = await storage.getStudent(user.studentId);
+        if (!student || student.classId !== classId) {
+          return res.status(403).json({ message: "Access denied - you are not a member of this class" });
+        }
       }
 
       // Get all students in the class (excluding passwords and sensitive data)
@@ -6491,7 +6610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use merged timetable data (global + weekly overrides)
       const user = req.user;
       let schoolId: string | undefined;
-      if (user.role !== 'superadmin' && user.schoolId) {
+      if (user.role !== 'super_admin' && user.schoolId) {
         schoolId = user.schoolId;
       }
       console.log(`[DETAILED API] Fetching timetable - classId: ${classId}, teacherId: ${teacherId}, schoolId: ${schoolId}`);
@@ -6536,6 +6655,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getSubjects(schoolId),
         storage.getClasses(schoolId),
       ]);
+
+      // Never return another school's timetable (a classId/teacherId from elsewhere is ignored)
+      if (schoolId) {
+        const schoolClassIds = new Set(classes.map(c => c.id));
+        timetable = timetable.filter(entry => schoolClassIds.has(entry.classId));
+      }
 
       // Enrich timetable with related data
       const detailedTimetable = timetable.map(entry => {
@@ -6709,7 +6834,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/timetable/optimize", async (req, res) => {
+  app.get("/api/timetable/optimize", authMiddleware, async (req, res) => {
     try {
       const suggestions = await scheduler.suggestOptimizations();
       res.json({ suggestions });
@@ -7649,8 +7774,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // CSV upload endpoints
-  app.post("/api/upload/teachers", upload.single('file'), async (req, res) => {
+  app.post("/api/upload/teachers", authMiddleware, upload.single('file'), async (req: any, res) => {
     try {
+      const user = req.user;
+      if (user.role !== 'admin' || !user.schoolId) {
+        return res.status(403).json({ message: "Access denied. School admin required." });
+      }
+
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
@@ -7674,7 +7804,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const employeeId = await storage.generateNextTeacherEmployeeId();
           const teacherWithId = {
             ...teacherData,
-            employeeId // Add T#### format employee ID
+            employeeId, // Add T#### format employee ID
+            schoolId: user.schoolId
           };
           
           const teacher = await storage.createTeacher(teacherWithId);
@@ -7775,6 +7906,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
 
   // Class Subject Assignments endpoints
+  // Simplified class-subject list for the Insights page: who teaches what, and how many periods a week
+  app.get("/api/class-subjects", authMiddleware, async (req: any, res) => {
+    try {
+      const user = req.user;
+      if (user.role !== 'admin' && user.role !== 'super_admin') {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const schoolId = user.role === 'admin' ? user.schoolId : req.query.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ message: "School ID is required" });
+      }
+
+      const assignments = await storage.getClassSubjectAssignments(undefined, schoolId);
+      res.json(assignments.map((assignment: any) => ({
+        id: assignment.id,
+        classId: assignment.classId,
+        subjectId: assignment.subjectId,
+        teacherId: assignment.assignedTeacherId,
+        weeklyPeriods: assignment.weeklyFrequency,
+      })));
+    } catch (error) {
+      console.error("Error fetching class subjects:", error);
+      res.status(500).json({ message: "Failed to fetch class subjects" });
+    }
+  });
+
   app.get("/api/class-subject-assignments", authMiddleware, async (req: any, res) => {
     try {
       const user = req.user;
@@ -11144,7 +11301,8 @@ Keep your response concise (under 150 words). Focus on actionable insights.`;
 
       const workingDays = timetableStructureData?.workingDays?.length || 6;
       const periodsPerDay = timetableStructureData?.timeSlots?.filter((slot: any) => !slot.isBreak).length || 7;
-      const defaultMaxPeriodsPerDay = timetableStructureData?.schoolDefaultMaxPeriodsPerDay || 6;
+      // The school-wide default lives on the school record, not the timetable structure
+      const defaultMaxPeriodsPerDay = (await storage.getSchool(schoolId))?.defaultMaxPeriodsPerDay || 6;
 
       // Build teacher workload map from actual timetable
       const teacherWorkload = new Map<string, { 
@@ -16365,6 +16523,29 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
     }
   });
 
+  // All stops across the school's routes (used by the Transport overview and Stops tab)
+  app.get("/api/transport-stops", authMiddleware, async (req: any, res) => {
+    try {
+      const user = req.user;
+
+      if (user.role !== 'admin' && user.role !== 'super_admin') {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const schoolId = user.role === 'admin' ? user.schoolId : req.query.schoolId;
+      if (!schoolId) {
+        return res.status(400).json({ message: "School ID is required" });
+      }
+
+      const routes = await storage.getTransportRoutes(schoolId);
+      const stopsPerRoute = await Promise.all(routes.map((route: any) => storage.getTransportStops(route.id)));
+      res.json(stopsPerRoute.flat());
+    } catch (error) {
+      console.error("Error fetching transport stops:", error);
+      res.status(500).json({ message: "Failed to fetch transport stops" });
+    }
+  });
+
   app.get("/api/transport-routes/:id", authMiddleware, async (req: any, res) => {
     try {
       const user = req.user;
@@ -18174,8 +18355,12 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
         return res.status(401).json({ message: "Authentication required" });
       }
 
+      if (user.role !== 'admin' && user.role !== 'super_admin') {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
       const schoolId = user.role === 'super_admin' ? req.query.schoolId as string : user.schoolId;
-      
+
       if (!schoolId) {
         return res.status(400).json({ message: "School ID is required" });
       }
@@ -18798,24 +18983,14 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
               .from(studentParents)
               .where(eq(studentParents.studentId, student.id))
               .limit(1);
-            
+
             if (parentLinks.length > 0) {
-              const parent = await storage.getParent(parentLinks[0].parentId);
-              if (parent) {
-                const [parentUser] = await db
-                  .select()
-                  .from(users)
-                  .where(eq(users.parentId, parent.id))
-                  .limit(1);
-                
-                if (parentUser) {
-                  userList.push({
-                    id: parentUser.id,
-                    role: 'parent' as const,
-                    admissionNumber: student.admissionNumber
-                  });
-                }
-              }
+              const parentUser = await storage.ensureParentUser(parentLinks[0].parentId, student.admissionNumber, student.schoolId, user.id);
+              userList.push({
+                id: parentUser.id,
+                role: 'parent' as const,
+                admissionNumber: student.admissionNumber
+              });
             }
             
             return userList;
@@ -18882,22 +19057,20 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
         
         targetUsers = await Promise.all(
           parents.filter(Boolean).map(async (parent: any) => {
-            const [parentUser] = await db
-              .select()
-              .from(users)
-              .where(eq(users.parentId, parent.id))
-              .limit(1);
-            
             const parentStudents = await db
               .select()
               .from(studentParents)
               .where(eq(studentParents.parentId, parent.id))
               .limit(1);
-            
+
             let admissionNumber = null;
+            let parentUser = null;
             if (parentStudents.length > 0) {
               const student = await storage.getStudent(parentStudents[0].studentId);
               admissionNumber = student?.admissionNumber || null;
+              if (student) {
+                parentUser = await storage.ensureParentUser(parent.id, student.admissionNumber, student.schoolId, user.id);
+              }
             }
 
             return {
@@ -19617,41 +19790,36 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
       const subjectMap = new Map(subjects.map(s => [s.id, s]));
       const classMap = new Map(classes.map(c => [c.id, c]));
 
-      // Get all timetable entries
-      const allTimetableEntries = await db
+      // Get the active timetable entries of this school's classes (timetable entries have no school column)
+      const classIds = classes.map(c => c.id);
+      const allTimetableEntries = classIds.length === 0 ? [] : await db
         .select()
         .from(timetableEntries)
-        .where(eq(timetableEntries.schoolId, schoolId));
+        .where(and(inArray(timetableEntries.classId, classIds), eq(timetableEntries.isActive, true)));
 
-      // Build report data
+      // Build report data: one row per teacher, one column per working day
+      const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       const reportData = teachers.map(teacher => {
-        const teacherSchedule = allTimetableEntries
-          .filter((entry: any) => entry.teacherId === teacher.id)
-          .map((entry: any) => {
-            const entryClass = classMap.get(entry.classId);
-            const className = entryClass ? `${entryClass.grade} - ${entryClass.section}` : 'N/A';
-            
-            return {
-              day: entry.day,
-              period: entry.period,
-              subject: subjectMap.get(entry.subjectId)?.name || 'N/A',
-              class: className
-            };
-          })
-          .sort((a, b) => {
-            const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            const dayCompare = dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
-            if (dayCompare !== 0) return dayCompare;
-            return a.period - b.period;
-          });
+        const teacherEntries = allTimetableEntries
+          .filter(entry => entry.teacherId === teacher.id)
+          .sort((a, b) => a.period - b.period);
 
-        return {
-          teacherId: teacher.id,
+        const row: Record<string, string | number> = {
           employeeId: teacher.employeeId,
           name: teacher.name,
-          totalPeriods: teacherSchedule.length,
-          schedule: teacherSchedule
+          totalPeriods: teacherEntries.length,
         };
+        for (const day of days) {
+          const periods = teacherEntries
+            .filter(entry => entry.day === day)
+            .map(entry => {
+              const entryClass = classMap.get(entry.classId);
+              const className = entryClass ? `${entryClass.grade} ${entryClass.section}` : 'N/A';
+              return `P${entry.period} ${subjectMap.get(entry.subjectId)?.name || 'N/A'} (${className})`;
+            });
+          row[day.charAt(0).toUpperCase() + day.slice(1)] = periods.join(', ') || '-';
+        }
+        return row;
       });
 
       res.json(reportData);
@@ -19675,15 +19843,16 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
       // Get workload analytics from storage
       const workloadData = await storage.getTeacherWorkloadAnalytics(schoolId);
 
-      // Format for report
-      const reportData = workloadData.map((teacher: any) => ({
-        teacherId: teacher.teacherId,
-        employeeId: teacher.employeeId,
+      // Format for report (the analytics return { teachers, summary })
+      const employeeIds = new Map((await storage.getTeachers(schoolId)).map(t => [t.id, t.employeeId]));
+      const reportData = workloadData.teachers.map((teacher: any) => ({
+        employeeId: employeeIds.get(teacher.teacherId) || 'N/A',
         name: teacher.teacherName,
-        totalPeriods: teacher.totalPeriods,
-        hoursPerWeek: teacher.hoursPerWeek,
-        workloadPercentage: teacher.workloadPercentage,
-        distribution: teacher.periodDistribution
+        periodsPerWeek: teacher.weeklyPeriods,
+        avgPeriodsPerDay: teacher.avgDailyPeriods,
+        busiestDayPeriods: teacher.maxDailyPeriods,
+        maxAllowedPerDay: teacher.maxAllowedDaily,
+        overloaded: teacher.isOverloaded ? 'Yes' : 'No'
       }));
 
       res.json(reportData);
@@ -19708,18 +19877,14 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
 
       const { category, favorites } = req.query;
 
-      let query = db.select().from(customReports)
-        .where(eq(customReports.schoolId, user.schoolId));
-
-      if (category) {
-        query = query.where(eq(customReports.category, category)) as any;
-      }
-
-      if (favorites === 'true') {
-        query = query.where(eq(customReports.isFavorite, true)) as any;
-      }
-
-      const reports = await query.orderBy(desc(customReports.createdAt));
+      // Build every filter into one where() - a second where() replaces the first and would drop the school filter
+      const reports = await db.select().from(customReports)
+        .where(and(
+          eq(customReports.schoolId, user.schoolId),
+          category ? eq(customReports.category, category) : undefined,
+          favorites === 'true' ? eq(customReports.isFavorite, true) : undefined
+        ))
+        .orderBy(desc(customReports.createdAt));
 
       res.json(reports);
     } catch (error) {
@@ -20055,6 +20220,21 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
     }
   });
 
+  // Upcoming events - registered before /:id so "upcoming" isn't treated as an event id
+  app.get("/api/calendar/events/upcoming", authMiddleware, async (req: any, res) => {
+    try {
+      const user = req.user;
+      const { days } = req.query;
+      const daysCount = days ? parseInt(days) : 30;
+
+      const upcomingEvents = await storage.getUpcomingCalendarEvents(user.schoolId, daysCount);
+      res.json(upcomingEvents);
+    } catch (error) {
+      console.error("Error fetching upcoming events:", error);
+      res.status(500).json({ message: "Failed to fetch upcoming events" });
+    }
+  });
+
   // Get single calendar event
   app.get("/api/calendar/events/:id", authMiddleware, async (req: any, res) => {
     try {
@@ -20085,20 +20265,6 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
   });
 
   // Get upcoming events
-  app.get("/api/calendar/events/upcoming", authMiddleware, async (req: any, res) => {
-    try {
-      const user = req.user;
-      const { days } = req.query;
-      const daysCount = days ? parseInt(days) : 30;
-      
-      const upcomingEvents = await storage.getUpcomingCalendarEvents(user.schoolId, daysCount);
-      res.json(upcomingEvents);
-    } catch (error) {
-      console.error("Error fetching upcoming events:", error);
-      res.status(500).json({ message: "Failed to fetch upcoming events" });
-    }
-  });
-
   // Create calendar event (admin only)
   app.post("/api/calendar/events", authMiddleware, async (req: any, res) => {
     try {
@@ -20263,10 +20429,16 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
   });
 
   // Submit new admission application
-  app.post("/api/admissions", async (req, res) => {
+  app.post("/api/admissions", authMiddleware, async (req: any, res) => {
     try {
-      console.log("[ADMISSION] Received data:", JSON.stringify(req.body, null, 2));
-      const validatedData = insertAdmissionApplicationSchema.parse(req.body);
+      const user = req.user;
+      if (user.role !== 'admin' && user.role !== 'super_admin') {
+        return res.status(403).json({ message: "Access denied. Admin required." });
+      }
+      const validatedData = insertAdmissionApplicationSchema.parse({
+        ...req.body,
+        ...(user.role === 'admin' ? { schoolId: user.schoolId } : {}),
+      });
       
       const application = await storage.createAdmissionApplication(validatedData);
       res.status(201).json(application);
@@ -20381,17 +20553,22 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
   });
 
   // Upload document for admission application
-  app.post("/api/admissions/:id/documents", documentUpload.single('document'), async (req: any, res) => {
+  app.post("/api/admissions/:id/documents", authMiddleware, documentUpload.single('document'), async (req: any, res) => {
     try {
+      const user = req.user;
       const { id } = req.params;
       const { documentType } = req.body;
+
+      if (user.role !== 'admin' && user.role !== 'super_admin') {
+        return res.status(403).json({ message: "Access denied. Admin required." });
+      }
 
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
 
       const existingApplication = await storage.getAdmissionApplication(id);
-      if (!existingApplication) {
+      if (!existingApplication || (user.role === 'admin' && existingApplication.schoolId !== user.schoolId)) {
         return res.status(404).json({ message: "Application not found" });
       }
 
@@ -20411,12 +20588,17 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
   });
 
   // Get documents for admission application
-  app.get("/api/admissions/:id/documents", async (req, res) => {
+  app.get("/api/admissions/:id/documents", authMiddleware, async (req: any, res) => {
     try {
+      const user = req.user;
       const { id } = req.params;
 
+      if (user.role !== 'admin' && user.role !== 'super_admin') {
+        return res.status(403).json({ message: "Access denied. Admin required." });
+      }
+
       const existingApplication = await storage.getAdmissionApplication(id);
-      if (!existingApplication) {
+      if (!existingApplication || (user.role === 'admin' && existingApplication.schoolId !== user.schoolId)) {
         return res.status(404).json({ message: "Application not found" });
       }
 
@@ -21377,17 +21559,19 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
   app.get("/api/hostel-allocations", authMiddleware, async (req: any, res) => {
     try {
       const filters: any = {};
+      // School admins only ever see their own school (super admins may pass ?schoolId=)
+      filters.schoolId = req.user.role === 'super_admin' ? (req.query.schoolId as string | undefined) : req.user.schoolId;
       
-      if (req.query.hostelId) {
+      if (req.query.hostelId && req.query.hostelId !== 'all') { // 'all' means no filter
         filters.hostelId = req.query.hostelId as string;
       }
-      if (req.query.studentId) {
+      if (req.query.studentId && req.query.studentId !== 'all') { // 'all' means no filter
         filters.studentId = req.query.studentId as string;
       }
       if (req.query.isActive !== undefined) {
         filters.isActive = req.query.isActive === 'true';
       }
-      if (req.query.sessionId) {
+      if (req.query.sessionId && req.query.sessionId !== 'all') { // 'all' means no filter
         filters.sessionId = req.query.sessionId as string;
       }
 
@@ -21412,6 +21596,13 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
       const room = await storage.getHostelRoom(req.body.roomId);
       if (!room) {
         return res.status(404).json({ message: "Room not found" });
+      }
+      if (user.role === 'admin' && !(await hostelAndStudentInSchool(room.hostelId, req.body.studentId, user.schoolId))) {
+        return res.status(404).json({ message: "Room or student not found" });
+      }
+      const existingStudentAllocations = await storage.getHostelAllocations({ studentId: req.body.studentId, isActive: true });
+      if (existingStudentAllocations.length > 0) {
+        return res.status(400).json({ message: "This student already has an active hostel allocation. Check them out first." });
       }
 
       // Check current allocations for this room
@@ -21512,17 +21703,19 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
   app.get("/api/hostel-fees", authMiddleware, async (req: any, res) => {
     try {
       const filters: any = {};
+      // School admins only ever see their own school (super admins may pass ?schoolId=)
+      filters.schoolId = req.user.role === 'super_admin' ? (req.query.schoolId as string | undefined) : req.user.schoolId;
       
-      if (req.query.hostelId) {
+      if (req.query.hostelId && req.query.hostelId !== 'all') { // 'all' means no filter
         filters.hostelId = req.query.hostelId as string;
       }
-      if (req.query.studentId) {
+      if (req.query.studentId && req.query.studentId !== 'all') { // 'all' means no filter
         filters.studentId = req.query.studentId as string;
       }
-      if (req.query.paymentStatus) {
+      if (req.query.paymentStatus && req.query.paymentStatus !== 'all') { // 'all' means no filter
         filters.paymentStatus = req.query.paymentStatus as string;
       }
-      if (req.query.sessionId) {
+      if (req.query.sessionId && req.query.sessionId !== 'all') { // 'all' means no filter
         filters.sessionId = req.query.sessionId as string;
       }
 
@@ -21544,6 +21737,9 @@ Provide a helpful, data-driven response. If asked about specific numbers, refere
       }
 
       const validatedData = insertHostelFeeSchema.parse(req.body);
+      if (user.role === 'admin' && !(await hostelAndStudentInSchool(validatedData.hostelId, validatedData.studentId, user.schoolId))) {
+        return res.status(404).json({ message: "Hostel or student not found" });
+      }
       const fee = await storage.createHostelFee(validatedData);
       res.status(201).json(fee);
     } catch (error: any) {

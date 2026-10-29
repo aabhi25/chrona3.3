@@ -276,7 +276,7 @@ export class IncrementalChangeService {
           })),
           teachers: teachers.filter(t => t).map(t => ({ 
             id: t!.id, 
-            name: `${t!.firstName} ${t!.lastName}`.trim(), 
+            name: t!.name, 
             impactType: 'assignment_change' 
           })),
           subjects: subjects.filter(s => s).map(s => ({ 
@@ -383,7 +383,7 @@ export class IncrementalChangeService {
         conflicts.push({
           type: 'teacher_capacity',
           severity: 'high',
-          description: `Teacher ${teacher.firstName} ${teacher.lastName} is at capacity (${totalPeriods} periods/week)`,
+          description: `Teacher ${teacher.name} is at capacity (${totalPeriods} periods/week)`,
           affectedEntities: { teachers: [teacherId] },
           proposedResolutions: [
             {

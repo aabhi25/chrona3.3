@@ -1,5 +1,7 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
+import { ZodError } from "zod";
 import { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { loginSchema } from "@shared/schema";
@@ -9,6 +11,27 @@ const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'developm
   console.error("FATAL: JWT_SECRET environment variable is required for secure token signing");
   process.exit(1);
 })());
+
+// Older credential generation stored this as every new parent/student password - it must never log anyone in
+const LEGACY_DEFAULT_PASSWORD = "default-password-please-change";
+
+// Fields that must never leave the server, and the plain temporary password only school admins may see
+const ALWAYS_HIDDEN_FIELDS = new Set(["passwordHash", "temporaryPassword"]);
+const ADMIN_ONLY_FIELDS = new Set(["temporaryPasswordPlainText"]);
+
+function scrubSecrets(value: any, showAdminFields: boolean, depth = 0): any {
+  if (depth > 12 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => scrubSecrets(item, showAdminFields, depth + 1));
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value; // Dates, Buffers, etc.
+  const result: Record<string, any> = {};
+  for (const [key, inner] of Object.entries(value)) {
+    if (ALWAYS_HIDDEN_FIELDS.has(key)) continue;
+    if (ADMIN_ONLY_FIELDS.has(key) && !showAdminFields) continue;
+    result[key] = scrubSecrets(inner, showAdminFields, depth + 1);
+  }
+  return result;
+}
 
 // Define custom user type with all fields (including sensitive fields for internal use)
 interface AuthUser {
@@ -112,7 +135,16 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
-    
+
+    // Until the first-login password change is done, only the /api/auth/* endpoints are usable
+    if (user.isFirstLogin && !req.originalUrl.startsWith("/api/auth/")) {
+      return res.status(423).json({
+        message: "Password change required. Please change your password to continue.",
+        requiresPasswordChange: true,
+        isFirstLogin: true
+      });
+    }
+
     req.user = user as AuthUser;
     next();
   } catch (error) {
@@ -241,6 +273,37 @@ export function requirePasswordChange(req: Request, res: Response, next: NextFun
   next();
 }
 
+// Brute-force protection: too many failed logins for the same id from the same address are blocked for a while
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const MAX_FAILED_LOGINS = 10;
+const failedLogins = new Map<string, { count: number; firstAt: number }>();
+
+export function loginRateLimit(req: Request, res: Response, next: NextFunction) {
+  const loginId = String(req.body?.email || req.body?.loginId || "").toLowerCase();
+  const key = `${req.ip}|${loginId}`;
+  const now = Date.now();
+  const entry = failedLogins.get(key);
+  if (entry && now - entry.firstAt > LOGIN_WINDOW_MS) failedLogins.delete(key);
+
+  const current = failedLogins.get(key);
+  if (current && current.count >= MAX_FAILED_LOGINS) {
+    const retryAfter = Math.ceil((current.firstAt + LOGIN_WINDOW_MS - now) / 1000);
+    res.setHeader("Retry-After", String(retryAfter));
+    return res.status(429).json({ message: "Too many failed login attempts. Please try again in a few minutes." });
+  }
+
+  res.on("finish", () => {
+    if (res.statusCode === 401) {
+      const existing = failedLogins.get(key);
+      if (existing) existing.count++;
+      else failedLogins.set(key, { count: 1, firstAt: Date.now() });
+    } else if (res.statusCode === 200) {
+      failedLogins.delete(key);
+    }
+  });
+  next();
+}
+
 // Login endpoint
 export async function login(req: Request, res: Response) {
   try {
@@ -285,8 +348,10 @@ export async function login(req: Request, res: Response) {
       }
     }
     
-    // If temporary password didn't work, try regular password
-    if (!isValidPassword) {
+    // If temporary password didn't work, try regular password - but not while the account is
+    // still waiting for its first password change (its stored password was never chosen by the user),
+    // and never the old shared default that older credential generation stored
+    if (!isValidPassword && !(authUser.isFirstLogin && authUser.temporaryPassword) && password !== LEGACY_DEFAULT_PASSWORD) {
       isValidPassword = await comparePasswords(password, authUser.passwordHash);
     }
     
@@ -337,6 +402,9 @@ export async function login(req: Request, res: Response) {
       usingTemporaryPassword
     });
   } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(400).json({ message: "Please enter your email or user ID and password" });
+    }
     console.error("Login error:", error);
     res.status(500).json({ message: "Login failed" });
   }
@@ -520,8 +588,7 @@ function generateLoginId(type: 'teacher' | 'student' | 'parent', admissionNumber
 }
 
 // Generate secure temporary password using crypto-secure random
-function generateTemporaryPasswordString(): string {
-  const crypto = require('crypto');
+export function generateTemporaryPasswordString(): string {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
   let result = '';
   for (let i = 0; i < 12; i++) {  // Increased to 12 characters for better security
@@ -886,7 +953,17 @@ export async function createParent(req: Request, res: Response) {
 
 // Setup authentication routes
 export function setupCustomAuth(app: any): void {
-  app.post("/api/auth/login", login);
+  // Safety net: strip password fields from every API response, whichever endpoint built it
+  app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+    const originalJson = res.json.bind(res);
+    res.json = (body: any) => {
+      const role = (req.user as any)?.role;
+      return originalJson(scrubSecrets(body, role === "admin" || role === "super_admin"));
+    };
+    next();
+  });
+
+  app.post("/api/auth/login", loginRateLimit, login);
   app.post("/api/auth/register-school-admin", authenticateToken, registerSchoolAdmin);
   app.post("/api/auth/change-password", authenticateToken, changePassword);
   app.post("/api/auth/first-login-password-change", authenticateToken, firstLoginPasswordChange);

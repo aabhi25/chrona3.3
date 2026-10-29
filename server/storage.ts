@@ -111,7 +111,6 @@ import {
   type AcademicSession,
   type InsertAcademicSession,
   // Messages
-  messages,
   type Message,
   type InsertMessage,
   // Notifications
@@ -119,14 +118,8 @@ import {
   type Notification,
   type InsertNotification,
   // Fee Management
-  feeTypes,
-  feeStructures,
   feeStructureItems,
-  studentFeeAssignments,
-  feeInvoices,
   feeInvoiceItems,
-  feePayments,
-  feeNotifications,
   type FeeType,
   type InsertFeeType,
   type FeeStructure,
@@ -144,11 +137,7 @@ import {
   type FeeNotification,
   type InsertFeeNotification,
   // Transport Management
-  transportRoutes,
   transportStops,
-  transportVehicles,
-  transportRouteAssignments,
-  transportStudentAssignments,
   type TransportRoute,
   type InsertTransportRoute,
   type TransportStop,
@@ -160,7 +149,6 @@ import {
   type TransportStudentAssignment,
   type InsertTransportStudentAssignment,
   // Incremental Update tables
-  incrementalChangeRequests,
   conflictDetectionResults,
   changeImpactAnalysis,
   type IncrementalChangeRequest,
@@ -170,7 +158,6 @@ import {
   type ChangeImpactAnalysis,
   type InsertChangeImpactAnalysis,
   // School Settings
-  schoolSettings,
   type SchoolSetting,
   type InsertSchoolSetting,
   // User Preferences
@@ -178,22 +165,18 @@ import {
   type UserPreference,
   type InsertUserPreference,
   // Teacher Planner Settings
-  teacherPlannerSettings,
   type TeacherPlannerSettings,
   type InsertTeacherPlannerSettings,
   // Calendar Events
-  calendarEvents,
   type CalendarEvent,
   type InsertCalendarEvent,
   // Admission Management
-  admissionApplications,
   admissionDocuments,
   type AdmissionApplication,
   type InsertAdmissionApplication,
   type AdmissionDocument,
   type InsertAdmissionDocument,
   // Exam Module
-  exams,
   examClasses,
   examSubjects,
   examMarks,
@@ -207,7 +190,6 @@ import {
   type ExamResult,
   type InsertExamResult,
   // Hostel Management
-  hostels,
   hostelRooms,
   hostelAllocations,
   hostelFees,
@@ -220,8 +202,6 @@ import {
   type HostelFee,
   type InsertHostelFee,
   // Inventory Management
-  inventoryCategories,
-  inventoryItems,
   inventoryTransactions,
   type InventoryCategory,
   type InsertInventoryCategory,
@@ -230,9 +210,7 @@ import {
   type InventoryTransaction,
   type InsertInventoryTransaction,
   // Payroll Management
-  payrollEmployees,
   salaryComponents,
-  payrollCycles,
   payrollPayslips,
   type PayrollEmployee,
   type InsertPayrollEmployee,
@@ -243,9 +221,6 @@ import {
   type PayrollPayslip,
   type InsertPayrollPayslip,
   // Expense Management
-  expenseCategories,
-  expenses,
-  budgets,
   type ExpenseCategory,
   type InsertExpenseCategory,
   type Expense,
@@ -265,7 +240,7 @@ import { db } from "./db";
 import { eq, and, or, inArray, notInArray, sql, ne, gte, lte, between, asc, desc, not, isNull } from "drizzle-orm";
 import { getCurrentDateIST, getCurrentDateTimeIST, getWeekStartDateIST, getWeekEndDateIST, toISTDateString } from "@shared/utils/dateUtils";
 import bcrypt from "bcryptjs";
-import { randomInt } from "crypto";
+import { randomBytes, randomInt } from "crypto";
 
 export interface IStorage {
   // User operations
@@ -780,13 +755,13 @@ export interface IStorage {
   updateHostelRoom(id: string, room: Partial<InsertHostelRoom>): Promise<HostelRoom>;
   deleteHostelRoom(id: string): Promise<void>;
   
-  getHostelAllocations(filters?: { hostelId?: string; studentId?: string; isActive?: boolean; sessionId?: string }): Promise<HostelAllocation[]>;
+  getHostelAllocations(filters?: { schoolId?: string; hostelId?: string; studentId?: string; isActive?: boolean; sessionId?: string }): Promise<HostelAllocation[]>;
   getHostelAllocation(id: string): Promise<HostelAllocation | undefined>;
   createHostelAllocation(allocation: InsertHostelAllocation): Promise<HostelAllocation>;
   updateHostelAllocation(id: string, allocation: Partial<InsertHostelAllocation>): Promise<HostelAllocation>;
   deleteHostelAllocation(id: string): Promise<void>;
   
-  getHostelFees(filters?: { hostelId?: string; studentId?: string; paymentStatus?: string; sessionId?: string }): Promise<HostelFee[]>;
+  getHostelFees(filters?: { schoolId?: string; hostelId?: string; studentId?: string; paymentStatus?: string; sessionId?: string }): Promise<HostelFee[]>;
   getHostelFee(id: string): Promise<HostelFee | undefined>;
   createHostelFee(fee: InsertHostelFee): Promise<HostelFee>;
   updateHostelFee(id: string, fee: Partial<InsertHostelFee>): Promise<HostelFee>;
@@ -2300,7 +2275,7 @@ export class DatabaseStorage implements IStorage {
     const [subjectCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(subjects)
-      .where(eq(teachers.schoolId, schoolId));
+      .where(eq(subjects.schoolId, schoolId));
 
     return {
       totalTeachers: Number(teacherCount?.count) || 0,
@@ -2470,10 +2445,14 @@ export class DatabaseStorage implements IStorage {
       // Get current session for the school if no session specified
       const currentSession = await this.getCurrentAcademicSession(schoolId);
       if (currentSession) {
-        conditions.push(eq(classSubjectAssignments.academicSessionId, currentSession.id));
+        // Older bulk imports saved assignments without a session - treat those as current
+        conditions.push(or(
+          eq(classSubjectAssignments.academicSessionId, currentSession.id),
+          isNull(classSubjectAssignments.academicSessionId)
+        )!);
       }
     }
-    
+
     // Add school filtering (classes already joined above)
     if (schoolId) {
       conditions.push(eq(classes.schoolId, schoolId));
@@ -2491,6 +2470,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createClassSubjectAssignment(assignment: InsertClassSubjectAssignment): Promise<ClassSubjectAssignment> {
+    // Timetables only read the current session's assignments, so never save one without a session
+    if (!assignment.academicSessionId) {
+      const [classRow] = await db.select({ schoolId: classes.schoolId }).from(classes).where(eq(classes.id, assignment.classId));
+      const currentSession = classRow ? await this.getCurrentAcademicSession(classRow.schoolId) : undefined;
+      if (currentSession) {
+        assignment = { ...assignment, academicSessionId: currentSession.id };
+      }
+    }
     const [newAssignment] = await db.insert(classSubjectAssignments).values(assignment).returning();
     return newAssignment;
   }
@@ -3286,8 +3273,8 @@ export class DatabaseStorage implements IStorage {
           email: sql`repl_teacher.email`
         },
         school: {
-          id: sql`school.id`,
-          name: sql`school.name`
+          id: schools.id,
+          name: schools.name
         },
         replacedByUser: {
           id: sql`replaced_by_user.id`,
@@ -3946,10 +3933,8 @@ export class DatabaseStorage implements IStorage {
           email: teachers.email,
           contactNumber: teachers.contactNumber,
           schoolIdNumber: teachers.schoolIdNumber,
-          subjects: teachers.subjects,
           classes: teachers.classes,
           availability: teachers.availability,
-          maxLoad: teachers.maxLoad,
           maxDailyPeriods: teachers.maxDailyPeriods,
           schoolId: teachers.schoolId,
           isActive: teachers.isActive,
@@ -4904,6 +4889,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Parent operations
+  async getParentsBySchool(schoolId: string): Promise<Parent[]> {
+    return await this.getParents(schoolId);
+  }
+
+  // Active parents of the active students in a class (each parent once)
+  async getParentsByClass(classId: string): Promise<Parent[]> {
+    return await db
+      .selectDistinct({ parent: parents })
+      .from(studentParents)
+      .innerJoin(students, eq(studentParents.studentId, students.id))
+      .innerJoin(parents, eq(studentParents.parentId, parents.id))
+      .where(and(eq(students.classId, classId), eq(students.isActive, true), eq(parents.isActive, true)))
+      .then(rows => rows.map(row => row.parent));
+  }
+
   async getParents(schoolId?: string): Promise<Parent[]> {
     let query = db.select().from(parents);
     const conditions = [eq(parents.isActive, true)];
@@ -4964,18 +4964,16 @@ export class DatabaseStorage implements IStorage {
         firstName: students.firstName,
         lastName: students.lastName,
         email: students.email,
-        phoneNumber: students.phoneNumber,
+        contactNumber: students.contactNumber,
         address: students.address,
         dateOfBirth: students.dateOfBirth,
         gender: students.gender,
         bloodGroup: students.bloodGroup,
         classId: students.classId,
         rollNumber: students.rollNumber,
-        emergencyContactName: students.emergencyContactName,
-        emergencyContactPhone: students.emergencyContactPhone,
+        emergencyContact: students.emergencyContact,
         medicalInfo: students.medicalInfo,
-        transportInfo: students.transportInfo,
-        photo: students.photo,
+        profilePictureUrl: students.profilePictureUrl,
         schoolId: students.schoolId,
         isActive: students.isActive,
         createdAt: students.createdAt,
@@ -5130,6 +5128,68 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // The student's parent record (primary first); one is created from the guardian details if none is linked yet
+  async ensureParentRecordForStudent(studentId: string): Promise<string> {
+    const links = await db
+      .select()
+      .from(studentParents)
+      .where(eq(studentParents.studentId, studentId))
+      .orderBy(desc(studentParents.isPrimary), asc(studentParents.createdAt));
+    if (links.length > 0) return links[0].parentId;
+
+    const student = await this.getStudent(studentId);
+    if (!student) throw new Error('Student not found');
+    const [firstName, ...rest] = (student.guardianName || `Parent of ${student.firstName}`).trim().split(/\s+/);
+    const relation = (student.guardianRelation || '').toLowerCase();
+    const [parent] = await db.insert(parents).values({
+      firstName,
+      lastName: rest.join(' ') || student.lastName,
+      contactNumber: student.guardianContact || student.emergencyContact || '',
+      address: student.address || '',
+      relationToStudent: (['father', 'mother', 'guardian'].includes(relation) ? relation : 'guardian') as 'father' | 'mother' | 'guardian',
+      schoolId: student.schoolId,
+    }).returning();
+    await db.insert(studentParents).values({ studentId, parentId: parent.id, isPrimary: true });
+    return parent.id;
+  }
+
+  // The parent's login account (P + admission number), linked to the parent record; created without a usable password if missing
+  async ensureParentUser(parentId: string, admissionNumber: string, schoolId: string, createdBy?: string): Promise<User> {
+    const [linkedUser] = await db.select().from(users).where(eq(users.parentId, parentId)).limit(1);
+    if (linkedUser) return linkedUser;
+
+    const parent = await this.getParent(parentId);
+    const loginId = `P${admissionNumber}`;
+    const [unlinkedUser] = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.loginId, loginId), eq(users.role, 'parent'), eq(users.schoolId, schoolId)));
+    if (unlinkedUser) {
+      // Accounts made before parent linking existed: attach them to the parent record
+      const [linked] = await db
+        .update(users)
+        .set({ parentId, firstName: unlinkedUser.firstName ?? parent?.firstName, lastName: unlinkedUser.lastName ?? parent?.lastName, updatedAt: new Date() })
+        .where(eq(users.id, unlinkedUser.id))
+        .returning();
+      return linked;
+    }
+
+    const [created] = await db.insert(users).values({
+      email: parent?.email || null,
+      loginId,
+      passwordHash: await bcrypt.hash(randomBytes(32).toString('hex'), 12), // Unguessable placeholder - the parent signs in with a temporary password
+      role: 'parent',
+      schoolId,
+      parentId,
+      firstName: parent?.firstName,
+      lastName: parent?.lastName,
+      isFirstLogin: true,
+      isActive: true,
+      createdBy: createdBy ?? null,
+    }).returning();
+    return created;
+  }
+
   async refreshStudentCredentials(studentId: string): Promise<{ studentLogin: { userId: string; loginId: string; temporaryPassword: string; expiresAt: Date; }; parentLogin: { userId: string; loginId: string; temporaryPassword: string; expiresAt: Date; }; }> {
     // Get student details
     const [student] = await db
@@ -5189,7 +5249,7 @@ export class DatabaseStorage implements IStorage {
       const [newUser] = await db.insert(users).values({
         email: student.email || null,
         loginId: studentLoginId,
-        passwordHash: await bcrypt.hash('default-password-please-change', 12), // Default password hash
+        passwordHash: await bcrypt.hash(randomBytes(32).toString('hex'), 12), // Unguessable placeholder - the user signs in with the temporary password
         temporaryPassword: hashedStudentTempPassword,
         temporaryPasswordPlainText: studentTempPassword,
         temporaryPasswordExpiresAt: tempPasswordExpiry,
@@ -5202,47 +5262,21 @@ export class DatabaseStorage implements IStorage {
       studentUserId = newUser.id;
     }
 
-    // Create or update parent user account
-    const parentLoginId = `P${student.admissionNumber}`;
-    const [existingParentUser] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(
-        eq(users.loginId, parentLoginId),
-        eq(users.role, 'parent'),
-        eq(users.schoolId, student.schoolId)
-      ));
-
-    let parentUserId: string;
-    if (existingParentUser) {
-      // Update existing parent user
-      await db
-        .update(users)
-        .set({
-          temporaryPassword: hashedParentTempPassword,
-          temporaryPasswordPlainText: parentTempPassword,
-          temporaryPasswordExpiresAt: tempPasswordExpiry,
-          isFirstLogin: true,
-          updatedAt: new Date()
-        })
-        .where(eq(users.id, existingParentUser.id));
-      parentUserId = existingParentUser.id;
-    } else {
-      // Create new parent user
-      const [newUser] = await db.insert(users).values({
-        email: null, // Parent email can be set later through profile
-        loginId: parentLoginId,
-        passwordHash: await bcrypt.hash('default-password-please-change', 12), // Default password hash
+    // Create or update the parent user account, always linked to the parent record
+    const parentId = await this.ensureParentRecordForStudent(student.id);
+    const parentUser = await this.ensureParentUser(parentId, student.admissionNumber, student.schoolId);
+    await db
+      .update(users)
+      .set({
         temporaryPassword: hashedParentTempPassword,
         temporaryPasswordPlainText: parentTempPassword,
         temporaryPasswordExpiresAt: tempPasswordExpiry,
-        role: 'parent',
-        schoolId: student.schoolId,
         isFirstLogin: true,
-        isActive: true
-      }).returning({ id: users.id });
-      parentUserId = newUser.id;
-    }
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, parentUser.id));
+    const parentUserId = parentUser.id;
+    const parentLoginId = parentUser.loginId;
 
     return {
       studentLogin: {
@@ -5627,11 +5661,10 @@ export class DatabaseStorage implements IStorage {
 
   // Fee Structures operations
   async getFeeStructures(schoolId: string, academicSessionId?: string): Promise<FeeStructure[]> {
-    const query = db.select().from(feeStructures).where(eq(feeStructures.schoolId, schoolId));
-    if (academicSessionId) {
-      query.where(and(eq(feeStructures.schoolId, schoolId), eq(feeStructures.academicSessionId, academicSessionId)));
-    }
-    return await query;
+    return await db.select().from(feeStructures).where(and(
+      eq(feeStructures.schoolId, schoolId),
+      academicSessionId ? eq(feeStructures.academicSessionId, academicSessionId) : undefined
+    ));
   }
 
   async getFeeStructure(id: string): Promise<FeeStructure | undefined> {
@@ -5702,11 +5735,10 @@ export class DatabaseStorage implements IStorage {
 
   // Student Fee Assignments operations
   async getStudentFeeAssignments(schoolId: string, academicSessionId?: string): Promise<StudentFeeAssignment[]> {
-    const query = db.select().from(studentFeeAssignments).where(eq(studentFeeAssignments.schoolId, schoolId));
-    if (academicSessionId) {
-      query.where(and(eq(studentFeeAssignments.schoolId, schoolId), eq(studentFeeAssignments.academicSessionId, academicSessionId)));
-    }
-    return await query;
+    return await db.select().from(studentFeeAssignments).where(and(
+      eq(studentFeeAssignments.schoolId, schoolId),
+      academicSessionId ? eq(studentFeeAssignments.academicSessionId, academicSessionId) : undefined
+    ));
   }
 
   async getStudentFeeAssignment(id: string): Promise<StudentFeeAssignment | undefined> {
@@ -5795,15 +5827,11 @@ export class DatabaseStorage implements IStorage {
       })
       .from(feeInvoices)
       .leftJoin(students, eq(feeInvoices.studentId, students.id))
-      .where(eq(feeInvoices.schoolId, schoolId));
-      
-    if (academicSessionId) {
-      query = query.where(and(
-        eq(feeInvoices.schoolId, schoolId), 
-        eq(feeInvoices.academicSessionId, academicSessionId)
-      )) as any;
-    }
-    
+      .where(and(
+        eq(feeInvoices.schoolId, schoolId),
+        academicSessionId ? eq(feeInvoices.academicSessionId, academicSessionId) : undefined
+      ));
+
     return await query;
   }
 
@@ -6252,11 +6280,10 @@ export class DatabaseStorage implements IStorage {
 
   // Transport Route Assignments operations
   async getTransportRouteAssignments(schoolId: string, academicSessionId?: string): Promise<TransportRouteAssignment[]> {
-    const query = db.select().from(transportRouteAssignments).where(eq(transportRouteAssignments.schoolId, schoolId));
-    if (academicSessionId) {
-      query.where(and(eq(transportRouteAssignments.schoolId, schoolId), eq(transportRouteAssignments.academicSessionId, academicSessionId)));
-    }
-    return await query;
+    return await db.select().from(transportRouteAssignments).where(and(
+      eq(transportRouteAssignments.schoolId, schoolId),
+      academicSessionId ? eq(transportRouteAssignments.academicSessionId, academicSessionId) : undefined
+    ));
   }
 
   async getTransportRouteAssignment(id: string): Promise<TransportRouteAssignment | undefined> {
@@ -6284,11 +6311,10 @@ export class DatabaseStorage implements IStorage {
 
   // Transport Student Assignments operations
   async getTransportStudentAssignments(schoolId: string, academicSessionId?: string): Promise<TransportStudentAssignment[]> {
-    const query = db.select().from(transportStudentAssignments).where(eq(transportStudentAssignments.schoolId, schoolId));
-    if (academicSessionId) {
-      query.where(and(eq(transportStudentAssignments.schoolId, schoolId), eq(transportStudentAssignments.academicSessionId, academicSessionId)));
-    }
-    return await query;
+    return await db.select().from(transportStudentAssignments).where(and(
+      eq(transportStudentAssignments.schoolId, schoolId),
+      academicSessionId ? eq(transportStudentAssignments.academicSessionId, academicSessionId) : undefined
+    ));
   }
 
   async getTransportStudentAssignment(id: string): Promise<TransportStudentAssignment | undefined> {
@@ -7709,9 +7735,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(hostelRooms.id, id));
   }
 
-  async getHostelAllocations(filters?: { hostelId?: string; studentId?: string; isActive?: boolean; sessionId?: string }): Promise<HostelAllocation[]> {
+  async getHostelAllocations(filters?: { schoolId?: string; hostelId?: string; studentId?: string; isActive?: boolean; sessionId?: string }): Promise<HostelAllocation[]> {
     const conditions = [];
-    
+
+    // Allocations have no school column - scope them through the student
+    if (filters?.schoolId) {
+      conditions.push(inArray(hostelAllocations.studentId, db.select({ id: students.id }).from(students).where(eq(students.schoolId, filters.schoolId))));
+    }
+
     if (filters?.studentId) {
       conditions.push(eq(hostelAllocations.studentId, filters.studentId));
     }
@@ -7724,32 +7755,27 @@ export class DatabaseStorage implements IStorage {
       conditions.push(eq(hostelAllocations.academicSessionId, filters.sessionId));
     }
     
-    // If hostelId is provided, we need to join with rooms
     if (filters?.hostelId) {
-      return await db
-        .select({
-          id: hostelAllocations.id,
-          roomId: hostelAllocations.roomId,
-          studentId: hostelAllocations.studentId,
-          academicSessionId: hostelAllocations.academicSessionId,
-          allocationDate: hostelAllocations.allocationDate,
-          checkOutDate: hostelAllocations.checkOutDate,
-          isActive: hostelAllocations.isActive,
-          createdAt: hostelAllocations.createdAt,
-          updatedAt: hostelAllocations.updatedAt,
-        })
-        .from(hostelAllocations)
-        .innerJoin(hostelRooms, eq(hostelRooms.id, hostelAllocations.roomId))
-        .where(and(
-          eq(hostelRooms.hostelId, filters.hostelId),
-          ...conditions
-        ))
-        .orderBy(desc(hostelAllocations.allocationDate));
+      conditions.push(eq(hostelRooms.hostelId, filters.hostelId));
     }
-    
+
+    // Join the room so each allocation carries its hostel and room number (the Hostel page shows both)
     return await db
-      .select()
+      .select({
+        id: hostelAllocations.id,
+        roomId: hostelAllocations.roomId,
+        studentId: hostelAllocations.studentId,
+        academicSessionId: hostelAllocations.academicSessionId,
+        allocationDate: hostelAllocations.allocationDate,
+        checkOutDate: hostelAllocations.checkOutDate,
+        isActive: hostelAllocations.isActive,
+        createdAt: hostelAllocations.createdAt,
+        updatedAt: hostelAllocations.updatedAt,
+        hostelId: hostelRooms.hostelId,
+        roomNumber: hostelRooms.roomNumber,
+      })
       .from(hostelAllocations)
+      .innerJoin(hostelRooms, eq(hostelRooms.id, hostelAllocations.roomId))
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(hostelAllocations.allocationDate));
   }
@@ -7785,9 +7811,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(hostelAllocations.id, id));
   }
 
-  async getHostelFees(filters?: { hostelId?: string; studentId?: string; paymentStatus?: string; sessionId?: string }): Promise<HostelFee[]> {
+  async getHostelFees(filters?: { schoolId?: string; hostelId?: string; studentId?: string; paymentStatus?: string; sessionId?: string }): Promise<HostelFee[]> {
     const conditions = [];
-    
+
+    // Hostel fees have no school column - scope them through the student
+    if (filters?.schoolId) {
+      conditions.push(inArray(hostelFees.studentId, db.select({ id: students.id }).from(students).where(eq(students.schoolId, filters.schoolId))));
+    }
+
     if (filters?.hostelId) {
       conditions.push(eq(hostelFees.hostelId, filters.hostelId));
     }
@@ -8101,8 +8132,10 @@ export class DatabaseStorage implements IStorage {
 
           const usedCapacity = teacherTotalPeriods[0]?.totalPeriods || 0;
           
-          if (usedCapacity > teacher.maxLoad) {
-            issues.push(`${teacher.name} is over-capacity (${usedCapacity}/${teacher.maxLoad} periods)`);
+          // Weekly capacity = daily limit x 6 working days (teachers have no separate weekly limit)
+          const weeklyCapacity = teacher.maxDailyPeriods * 6;
+          if (usedCapacity > weeklyCapacity) {
+            issues.push(`${teacher.name} is over-capacity (${usedCapacity}/${weeklyCapacity} periods)`);
           }
         }
       }

@@ -203,14 +203,10 @@ export async function generateCustomReport(
   // Build query
   let query = db.select().from(table);
 
-  // Add school filter (all tables should have schoolId)
-  query = query.where(eq(table.schoolId, schoolId)) as any;
-
-  // Add custom filters
+  // School filter (all tables have schoolId) plus the report's own filters, in a single where() -
+  // a second where() would replace the school filter and return other schools' rows
   const whereClause = buildWhereClause(filters, table);
-  if (whereClause) {
-    query = query.where(whereClause) as any;
-  }
+  query = query.where(whereClause ? and(eq(table.schoolId, schoolId), whereClause) : eq(table.schoolId, schoolId)) as any;
 
   // Add sorting
   if (sortBy && table[sortBy]) {

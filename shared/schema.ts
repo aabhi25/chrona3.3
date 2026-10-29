@@ -14,6 +14,7 @@ import {
   check,
   unique,
   numeric,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -89,7 +90,7 @@ export const users = pgTable("users", {
   temporaryPasswordPlainText: varchar("temporary_password_plain_text", { length: 255 }), // Plain text for admin sharing (cleared on first login)
   temporaryPasswordExpiresAt: timestamp("temporary_password_expires_at"), // Expiry timestamp for temporary password
   role: varchar("role", { enum: ["super_admin", "admin", "teacher", "student", "parent"] }).notNull().default("teacher"),
-  customRoleId: uuid("custom_role_id").references(() => customRoles.id, { onDelete: "set null" }), // Optional custom role assignment
+  customRoleId: uuid("custom_role_id").references((): AnyPgColumn => customRoles.id, { onDelete: "set null" }), // Optional custom role assignment
   isFirstLogin: boolean("is_first_login").notNull().default(true), // Force password change on first login
   schoolId: uuid("school_id").references(() => schools.id, { onDelete: "cascade" }),
   teacherId: uuid("teacher_id").references(() => teachers.id, { onDelete: "set null" }),
@@ -100,7 +101,7 @@ export const users = pgTable("users", {
   passwordChangedAt: timestamp("password_changed_at"),
   lastLoginAt: timestamp("last_login_at"),
   isActive: boolean("is_active").notNull().default(true),
-  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }), // Self-reference to user who created this user
+  createdBy: varchar("created_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }), // Self-reference to user who created this user
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -194,7 +195,7 @@ export const customRoles = pgTable("custom_roles", {
   color: varchar("color", { length: 20 }).default("#6366f1"), // Badge color for UI
   basedOnRole: varchar("based_on_role", { enum: ["admin", "teacher", "student", "parent"] }).notNull().default("teacher"), // System role this extends
   isActive: boolean("is_active").notNull().default(true),
-  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdBy: varchar("created_by").notNull().references((): AnyPgColumn => users.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
@@ -2311,7 +2312,11 @@ export const insertHostelRoomSchema = createInsertSchema(hostelRooms).omit({
 export type HostelRoom = typeof hostelRooms.$inferSelect;
 export type InsertHostelRoom = z.infer<typeof insertHostelRoomSchema>;
 
-export const insertHostelAllocationSchema = createInsertSchema(hostelAllocations).omit({
+// Dates and amounts arrive as JSON strings/numbers, so coerce them
+export const insertHostelAllocationSchema = createInsertSchema(hostelAllocations, {
+  allocationDate: z.coerce.date().optional(),
+  checkOutDate: z.coerce.date().nullable().optional(),
+}).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
@@ -2319,7 +2324,11 @@ export const insertHostelAllocationSchema = createInsertSchema(hostelAllocations
 export type HostelAllocation = typeof hostelAllocations.$inferSelect;
 export type InsertHostelAllocation = z.infer<typeof insertHostelAllocationSchema>;
 
-export const insertHostelFeeSchema = createInsertSchema(hostelFees).omit({
+export const insertHostelFeeSchema = createInsertSchema(hostelFees, {
+  feeAmount: z.coerce.string(),
+  dueDate: z.coerce.date(),
+  paidDate: z.coerce.date().nullable().optional(),
+}).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
@@ -3284,6 +3293,106 @@ export const coursePrerequisitesRelations = relations(coursePrerequisites, ({ on
     fields: [coursePrerequisites.prerequisiteCourseId],
     references: [courses.id],
     relationName: "prerequisiteToCourses",
+  }),
+}));
+
+export const courseMembershipsRelations = relations(courseMemberships, ({ one }) => ({
+  course: one(courses, {
+    fields: [courseMemberships.courseId],
+    references: [courses.id],
+  }),
+  student: one(students, {
+    fields: [courseMemberships.studentId],
+    references: [students.id],
+  }),
+}));
+
+export const quizzesRelations = relations(quizzes, ({ one, many }) => ({
+  course: one(courses, {
+    fields: [quizzes.courseId],
+    references: [courses.id],
+  }),
+  lesson: one(lessons, {
+    fields: [quizzes.lessonId],
+    references: [lessons.id],
+  }),
+  questions: many(quizQuestions),
+  attempts: many(quizAttempts),
+}));
+
+export const quizQuestionsRelations = relations(quizQuestions, ({ one, many }) => ({
+  quiz: one(quizzes, {
+    fields: [quizQuestions.quizId],
+    references: [quizzes.id],
+  }),
+  options: many(quizQuestionOptions),
+}));
+
+export const quizQuestionOptionsRelations = relations(quizQuestionOptions, ({ one }) => ({
+  question: one(quizQuestions, {
+    fields: [quizQuestionOptions.questionId],
+    references: [quizQuestions.id],
+  }),
+}));
+
+export const quizAttemptsRelations = relations(quizAttempts, ({ one, many }) => ({
+  quiz: one(quizzes, {
+    fields: [quizAttempts.quizId],
+    references: [quizzes.id],
+  }),
+  student: one(students, {
+    fields: [quizAttempts.studentId],
+    references: [students.id],
+  }),
+  answers: many(quizAnswers),
+}));
+
+export const quizAnswersRelations = relations(quizAnswers, ({ one }) => ({
+  attempt: one(quizAttempts, {
+    fields: [quizAnswers.attemptId],
+    references: [quizAttempts.id],
+  }),
+  question: one(quizQuestions, {
+    fields: [quizAnswers.questionId],
+    references: [quizQuestions.id],
+  }),
+}));
+
+export const assignmentsRelations = relations(assignments, ({ one, many }) => ({
+  course: one(courses, {
+    fields: [assignments.courseId],
+    references: [courses.id],
+  }),
+  lesson: one(lessons, {
+    fields: [assignments.lessonId],
+    references: [lessons.id],
+  }),
+  submissions: many(assignmentSubmissions),
+}));
+
+export const assignmentSubmissionsRelations = relations(assignmentSubmissions, ({ one }) => ({
+  assignment: one(assignments, {
+    fields: [assignmentSubmissions.assignmentId],
+    references: [assignments.id],
+  }),
+  student: one(students, {
+    fields: [assignmentSubmissions.studentId],
+    references: [students.id],
+  }),
+  grader: one(teachers, {
+    fields: [assignmentSubmissions.gradedBy],
+    references: [teachers.id],
+  }),
+}));
+
+export const studentProgressRelations = relations(studentProgress, ({ one }) => ({
+  course: one(courses, {
+    fields: [studentProgress.courseId],
+    references: [courses.id],
+  }),
+  student: one(students, {
+    fields: [studentProgress.studentId],
+    references: [students.id],
   }),
 }));
 

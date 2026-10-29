@@ -8,7 +8,9 @@ import { eq, and } from "drizzle-orm";
 const router = Router();
 
 // Helper function to check if student is enrolled in a course
-async function checkEnrollment(courseId: string, studentId: string): Promise<boolean> {
+async function checkEnrollment(courseId: string, studentId: string | null | undefined): Promise<boolean> {
+  // Teachers and admins have no student record, so they are never enrolled as students
+  if (!studentId) return false;
   const enrollment = await db.query.courseMemberships.findFirst({
     where: and(
       eq(courseMemberships.courseId, courseId),
@@ -392,6 +394,15 @@ router.get("/quizzes/:id", async (req, res) => {
       if (!isEnrolled) {
         return res.status(403).json({ error: "Not enrolled in this course" });
       }
+
+      // Students must not receive the answer key
+      return res.json({
+        ...quiz,
+        questions: quiz.questions.map(({ explanation, options, ...question }) => ({
+          ...question,
+          options: options.map(({ isCorrect, ...option }) => option),
+        })),
+      });
     }
 
     res.json(quiz);
