@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -6,71 +7,79 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { useAuth } from "@/hooks/useAuth";
 import Dashboard from "@/pages/Dashboard";
-import InsightsPage from "@/pages/InsightsPage";
-import TimetableView from "@/pages/TimetableView";
-import TimetableSettingsPage from "@/pages/TimetableSettingsPage";
 import { TimetableGuard } from "@/components/TimetableGuard";
-import StudentsPage from "@/pages/StudentsPage";
-import { StudentDetailPage } from "@/pages/StudentDetailPage";
-import TeacherView from "@/pages/TeacherView";
-import TeacherBulkUpload from "@/pages/TeacherBulkUpload";
-import TeacherBulkReview from "@/pages/TeacherBulkReview";
-import StudentBulkUpload from "@/pages/StudentBulkUpload";
-import StudentBulkReview from "@/pages/StudentBulkReview";
-import ClassesPage from "@/pages/ClassesPage";
-import ClassDetailPage from "@/pages/ClassDetailPage";
-import ClassBulkUpload from "@/pages/ClassBulkUpload";
-import ClassBulkReview from "@/pages/ClassBulkReview";
-import ClassBulkImportPage from "@/pages/ClassBulkImportPage";
-import SubjectsPage from "@/pages/SubjectsPage";
-import SettingsPage from "@/pages/SettingsPage";
-import BulkUploadPage from "@/pages/settings/BulkUploadPage";
-import BulkReviewPage from "@/pages/settings/BulkReviewPage";
-import TeacherProfile from "@/pages/TeacherProfile";
-import AdminDashboardPage from "@/pages/AdminDashboardPage";
-import MyProfilePage from "@/pages/MyProfilePage";
-import MyClassPage from "@/pages/MyClassPage";
-import StudentAttendancePage from "@/pages/StudentAttendancePage";
-import AttendancePage from "@/pages/AttendancePage";
-import TeacherAttendancePage from "@/pages/TeacherAttendancePage";
-import TeacherMyAttendancePage from "@/pages/TeacherMyAttendancePage";
-import TimetableTestPage from "@/pages/TimetableTestPage";
-import FeeManagementPage from "@/pages/FeeManagementPage";
-import TransportManagementPage from "@/pages/TransportManagementPage";
-import TeacherPlannerPage from "@/pages/TeacherPlannerPage";
-import CalendarPage from "@/pages/CalendarPage";
-import MessagingPage from "@/pages/MessagingPage";
-import NotificationsPage from "@/pages/NotificationsPage";
-import MorePage from "@/pages/MorePage";
-import UserManagementPage from "@/pages/UserManagementPage";
-import ClassUserManagementPage from "@/pages/ClassUserManagementPage";
-import SmartReports from "@/pages/SmartReports";
-import ReportsPage from "@/pages/ReportsPage";
-import TeacherMyClassesPage from "@/pages/TeacherMyClassesPage";
-import TeacherClassDetailPage from "@/pages/TeacherClassDetailPage";
-import AdmissionPage from "@/pages/AdmissionPage";
-import ExamPage from "@/pages/ExamPage";
-import HostelPage from "@/pages/HostelPage";
-import InventoryPage from "@/pages/InventoryPage";
-import PayrollPage from "@/pages/PayrollPage";
-import ExpensePage from "@/pages/ExpensePage";
-import IDCardsPage from "@/pages/IDCardsPage";
-import CertificationPage from "@/pages/CertificationPage";
-import ELearningPage from "@/pages/ELearningPage";
-import CourseDetailPage from "@/pages/CourseDetailPage";
-import LessonDetailPage from "@/pages/LessonDetailPage";
-import LessonEditorPage from "@/pages/LessonEditorPage";
-import AdminChatPage from "@/pages/AdminChatPage";
-import RolePermissionsPage from "@/pages/RolePermissionsPage";
-import TeacherLeaveApplicationPage from "@/pages/TeacherLeaveApplicationPage";
-import TeacherSchedulePage from "@/pages/TeacherSchedulePage";
-import TeacherSalaryPage from "@/pages/TeacherSalaryPage";
 import NotFound from "@/pages/not-found";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
 import ChangePasswordPage from "@/pages/ChangePasswordPage";
-import SimulationDetailsPage from "@/pages/SimulationDetailsPage";
-import LoadSimulationBulkReview from "@/pages/LoadSimulationBulkReview";
+const InsightsPage = lazy(() => import("@/pages/InsightsPage"));
+const TimetableView = lazy(() => import("@/pages/TimetableView"));
+const TimetableSettingsPage = lazy(() => import("@/pages/TimetableSettingsPage"));
+const StudentsPage = lazy(() => import("@/pages/StudentsPage"));
+const StudentDetailPage = lazy(() => import("@/pages/StudentDetailPage").then((m) => ({ default: m.StudentDetailPage })));
+const TeacherView = lazy(() => import("@/pages/TeacherView"));
+const TeacherBulkUpload = lazy(() => import("@/pages/TeacherBulkUpload"));
+const TeacherBulkReview = lazy(() => import("@/pages/TeacherBulkReview"));
+const StudentBulkUpload = lazy(() => import("@/pages/StudentBulkUpload"));
+const StudentBulkReview = lazy(() => import("@/pages/StudentBulkReview"));
+const ClassesPage = lazy(() => import("@/pages/ClassesPage"));
+const ClassDetailPage = lazy(() => import("@/pages/ClassDetailPage"));
+const ClassBulkUpload = lazy(() => import("@/pages/ClassBulkUpload"));
+const ClassBulkReview = lazy(() => import("@/pages/ClassBulkReview"));
+const ClassBulkImportPage = lazy(() => import("@/pages/ClassBulkImportPage"));
+const SubjectsPage = lazy(() => import("@/pages/SubjectsPage"));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
+const BulkUploadPage = lazy(() => import("@/pages/settings/BulkUploadPage"));
+const BulkReviewPage = lazy(() => import("@/pages/settings/BulkReviewPage"));
+const TeacherProfile = lazy(() => import("@/pages/TeacherProfile"));
+const AdminDashboardPage = lazy(() => import("@/pages/AdminDashboardPage"));
+const MyProfilePage = lazy(() => import("@/pages/MyProfilePage"));
+const MyClassPage = lazy(() => import("@/pages/MyClassPage"));
+const StudentAttendancePage = lazy(() => import("@/pages/StudentAttendancePage"));
+const AttendancePage = lazy(() => import("@/pages/AttendancePage"));
+const TeacherAttendancePage = lazy(() => import("@/pages/TeacherAttendancePage"));
+const TeacherMyAttendancePage = lazy(() => import("@/pages/TeacherMyAttendancePage"));
+const FeeManagementPage = lazy(() => import("@/pages/FeeManagementPage"));
+const TransportManagementPage = lazy(() => import("@/pages/TransportManagementPage"));
+const TeacherPlannerPage = lazy(() => import("@/pages/TeacherPlannerPage"));
+const CalendarPage = lazy(() => import("@/pages/CalendarPage"));
+const MessagingPage = lazy(() => import("@/pages/MessagingPage"));
+const NotificationsPage = lazy(() => import("@/pages/NotificationsPage"));
+const MorePage = lazy(() => import("@/pages/MorePage"));
+const UserManagementPage = lazy(() => import("@/pages/UserManagementPage"));
+const ClassUserManagementPage = lazy(() => import("@/pages/ClassUserManagementPage"));
+const SmartReports = lazy(() => import("@/pages/SmartReports"));
+const ReportsPage = lazy(() => import("@/pages/ReportsPage"));
+const TeacherMyClassesPage = lazy(() => import("@/pages/TeacherMyClassesPage"));
+const TeacherClassDetailPage = lazy(() => import("@/pages/TeacherClassDetailPage"));
+const AdmissionPage = lazy(() => import("@/pages/AdmissionPage"));
+const ExamPage = lazy(() => import("@/pages/ExamPage"));
+const HostelPage = lazy(() => import("@/pages/HostelPage"));
+const InventoryPage = lazy(() => import("@/pages/InventoryPage"));
+const PayrollPage = lazy(() => import("@/pages/PayrollPage"));
+const ExpensePage = lazy(() => import("@/pages/ExpensePage"));
+const IDCardsPage = lazy(() => import("@/pages/IDCardsPage"));
+const CertificationPage = lazy(() => import("@/pages/CertificationPage"));
+const ELearningPage = lazy(() => import("@/pages/ELearningPage"));
+const CourseDetailPage = lazy(() => import("@/pages/CourseDetailPage"));
+const LessonDetailPage = lazy(() => import("@/pages/LessonDetailPage"));
+const LessonEditorPage = lazy(() => import("@/pages/LessonEditorPage"));
+const AdminChatPage = lazy(() => import("@/pages/AdminChatPage"));
+const RolePermissionsPage = lazy(() => import("@/pages/RolePermissionsPage"));
+const TeacherLeaveApplicationPage = lazy(() => import("@/pages/TeacherLeaveApplicationPage"));
+const TeacherSchedulePage = lazy(() => import("@/pages/TeacherSchedulePage"));
+const TeacherSalaryPage = lazy(() => import("@/pages/TeacherSalaryPage"));
+const SimulationDetailsPage = lazy(() => import("@/pages/SimulationDetailsPage"));
+const LoadSimulationBulkReview = lazy(() => import("@/pages/LoadSimulationBulkReview"));
+
+// Pages are loaded on first visit, so the first page load stays small
+function PageLoading() {
+  return (
+    <div className="flex items-center justify-center py-24">
+      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+    </div>
+  );
+}
 
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -100,6 +109,7 @@ function Router() {
 
   return (
     <Layout>
+      <Suspense fallback={<PageLoading />}>
       <Switch>
         <Route path="/" component={Dashboard} />
         
@@ -128,7 +138,6 @@ function Router() {
           </Route>
         )}
         {isSchoolAdmin && <Route path="/timetable/settings" component={TimetableSettingsPage} />}
-        {isSchoolAdmin && <Route path="/timetable/test" component={TimetableTestPage} />}
         {isSchoolAdmin && <Route path="/teachers" component={TeacherView} />}
         {isSchoolAdmin && <Route path="/teachers/bulk-upload" component={TeacherBulkUpload} />}
         {isSchoolAdmin && <Route path="/teachers/bulk-review" component={TeacherBulkReview} />}
@@ -166,7 +175,7 @@ function Router() {
         {isParent && <Route path="/my-attendance" component={StudentAttendancePage} />}
         {isParent && <Route path="/my-class" component={MyClassPage} />}
         {isParent && <Route path="/my-profile" component={MyProfilePage} />}
-        
+
         {/* Teacher only pages */}
         {isTeacher && <Route path="/my-class" component={TeacherMyClassesPage} />}
         {isTeacher && <Route path="/my-classes/:id" component={TeacherClassDetailPage} />}
@@ -195,6 +204,7 @@ function Router() {
         
         <Route component={NotFound} />
       </Switch>
+      </Suspense>
     </Layout>
   );
 }
