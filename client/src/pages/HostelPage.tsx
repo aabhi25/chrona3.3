@@ -1073,7 +1073,7 @@ export default function HostelPage() {
                               <SelectContent>
                                 {students.map((s: any) => (
                                   <SelectItem key={s.id} value={s.id}>
-                                    {s.name} ({s.admissionNumber})
+                                    {s.firstName} {s.lastName} ({s.admissionNumber})
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -1123,7 +1123,7 @@ export default function HostelPage() {
                               <SelectContent>
                                 {sessions.map((s: any) => (
                                   <SelectItem key={s.id} value={s.id}>
-                                    {s.name}
+                                    {`${s.startDate.slice(0, 4)}-${s.endDate.slice(2, 4)}`}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -1198,7 +1198,7 @@ export default function HostelPage() {
                     return (
                       <TableRow key={allocation.id}>
                         <TableCell className="font-medium">
-                          {student?.name || "Unknown"}
+                          {student ? `${student.firstName} ${student.lastName}` : "Unknown"}
                         </TableCell>
                         <TableCell>{hostel?.name || "Unknown"}</TableCell>
                         <TableCell>{allocation.roomNumber || "-"}</TableCell>
@@ -1264,7 +1264,7 @@ export default function HostelPage() {
                   <SelectItem value="all">All Sessions</SelectItem>
                   {sessions.map((s: any) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.name}
+                      {`${s.startDate.slice(0, 4)}-${s.endDate.slice(2, 4)}`}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1323,7 +1323,7 @@ export default function HostelPage() {
                               <SelectContent>
                                 {students.map((s: any) => (
                                   <SelectItem key={s.id} value={s.id}>
-                                    {s.name} ({s.admissionNumber})
+                                    {s.firstName} {s.lastName} ({s.admissionNumber})
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -1347,7 +1347,7 @@ export default function HostelPage() {
                               <SelectContent>
                                 {sessions.map((s: any) => (
                                   <SelectItem key={s.id} value={s.id}>
-                                    {s.name}
+                                    {`${s.startDate.slice(0, 4)}-${s.endDate.slice(2, 4)}`}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -1461,10 +1461,10 @@ export default function HostelPage() {
                     return (
                       <TableRow key={fee.id}>
                         <TableCell className="font-medium">
-                          {student?.name || "Unknown"}
+                          {student ? `${student.firstName} ${student.lastName}` : "Unknown"}
                         </TableCell>
                         <TableCell>{hostel?.name || "Unknown"}</TableCell>
-                        <TableCell>₹{fee.feeAmount.toFixed(2)}</TableCell>
+                        <TableCell>₹{Number(fee.feeAmount).toFixed(2)}</TableCell>
                         <TableCell className="capitalize">{fee.feeType.replace("_", " ")}</TableCell>
                         <TableCell>
                           {fee.dueDate ? format(new Date(fee.dueDate), "PP") : "-"}

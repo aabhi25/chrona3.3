@@ -104,7 +104,7 @@ export default function PayrollPage() {
   });
 
   const { data: users = [] } = useQuery({
-    queryKey: ["/api/users", user?.schoolId],
+    queryKey: ["/api/users"],
   });
 
   const { data: teachersData } = useQuery({

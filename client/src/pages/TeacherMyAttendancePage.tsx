@@ -16,7 +16,7 @@ import { useLocation } from "wouter";
 interface TeacherAttendanceRecord {
   id: string;
   teacherId: string;
-  date: string;
+  attendanceDate: string;
   status: "present" | "absent" | "sick_leave" | "personal_leave" | "medical_leave";
   leaveStartDate?: string;
   leaveEndDate?: string;
@@ -75,7 +75,7 @@ export default function TeacherMyAttendancePage() {
 
   // Get attendance for selected date
   const selectedDateRecord = selectedDate
-    ? attendanceRecords.find((r) => isSameDay(parseISO(r.date), selectedDate))
+    ? attendanceRecords.find((r) => isSameDay(parseISO(r.attendanceDate), selectedDate))
     : null;
 
   // Get status badge
@@ -98,7 +98,7 @@ export default function TeacherMyAttendancePage() {
 
   // Get day status for calendar
   const getDayStatus = (day: Date) => {
-    const record = attendanceRecords.find((r) => isSameDay(parseISO(r.date), day));
+    const record = attendanceRecords.find((r) => isSameDay(parseISO(r.attendanceDate), day));
     return record?.status;
   };
 
@@ -357,18 +357,18 @@ export default function TeacherMyAttendancePage() {
           ) : attendanceRecords.length > 0 ? (
             <div className="space-y-2">
               {attendanceRecords
-                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                .sort((a, b) => new Date(b.attendanceDate).getTime() - new Date(a.attendanceDate).getTime())
                 .slice(0, 10)
                 .map((record) => (
                   <div
                     key={record.id}
                     className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent cursor-pointer"
-                    onClick={() => setSelectedDate(parseISO(record.date))}
+                    onClick={() => setSelectedDate(parseISO(record.attendanceDate))}
                   >
                     <div className="flex items-center gap-3">
                       <CalendarIcon className="h-5 w-5 text-muted-foreground" />
                       <div>
-                        <p className="font-medium">{format(parseISO(record.date), "dd MMMM yyyy")}</p>
+                        <p className="font-medium">{format(parseISO(record.attendanceDate), "dd MMMM yyyy")}</p>
                         {record.reason && (
                           <p className="text-sm text-muted-foreground">{record.reason}</p>
                         )}
