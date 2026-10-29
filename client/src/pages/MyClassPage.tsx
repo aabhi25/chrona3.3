@@ -1,4 +1,5 @@
 import { useAuth } from "@/hooks/useAuth";
+import { useViewedStudentId } from "@/hooks/useViewedStudentId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -107,15 +108,16 @@ interface TimetableEntry {
 
 export default function MyClassPage() {
   const { user } = useAuth();
+  const viewedStudentId = useViewedStudentId();
 
   // Fetch student details to get class information
   const { data: studentDetails, isLoading: loadingStudentDetails } = useQuery({
-    queryKey: ["student-details", user?.studentId],
+    queryKey: ["student-details", viewedStudentId],
     queryFn: async () => {
-      const response = await apiRequest("GET", `/api/students/${user?.studentId}`);
+      const response = await apiRequest("GET", `/api/students/${viewedStudentId}`);
       return await response.json();
     },
-    enabled: user?.role === 'student' && !!user?.studentId
+    enabled: !!viewedStudentId
   });
 
   // Class data query based on student's class
@@ -166,7 +168,7 @@ export default function MyClassPage() {
     staleTime: 0,
   });
 
-  if (user?.role !== 'student') {
+  if (user?.role !== "student" && user?.role !== "parent") {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
@@ -333,7 +335,7 @@ export default function MyClassPage() {
                     <div
                       key={student.id}
                       className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
-                        student.id === user?.studentId 
+                        student.id === viewedStudentId 
                           ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800' 
                           : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
                       }`}
@@ -349,7 +351,7 @@ export default function MyClassPage() {
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-medium text-gray-900 dark:text-gray-100" data-testid={`text-student-name-${student.id}`}>
                             {student.firstName} {student.lastName}
-                            {student.id === user?.studentId && (
+                            {student.id === viewedStudentId && (
                               <span className="text-xs text-blue-600 dark:text-blue-400 font-normal ml-1">(You)</span>
                             )}
                           </p>

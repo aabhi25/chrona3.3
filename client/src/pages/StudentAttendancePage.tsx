@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useViewedStudentId } from "@/hooks/useViewedStudentId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { 
@@ -30,6 +31,7 @@ import {
 
 export default function StudentAttendancePage() {
   const { user } = useAuth();
+  const viewedStudentId = useViewedStudentId();
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const monthStart = startOfMonth(currentMonth);
@@ -37,33 +39,33 @@ export default function StudentAttendancePage() {
   
   // Get attendance for current month
   const { data: monthAttendance = [] } = useQuery({
-    queryKey: ["student-attendance-month", user?.studentId, format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd')],
+    queryKey: ["student-attendance-month", viewedStudentId, format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd')],
     queryFn: async () => {
-      const response = await apiRequest("GET", `/api/student-attendance?studentId=${user?.studentId}&startDate=${format(monthStart, 'yyyy-MM-dd')}&endDate=${format(monthEnd, 'yyyy-MM-dd')}`);
+      const response = await apiRequest("GET", `/api/student-attendance?studentId=${viewedStudentId}&startDate=${format(monthStart, 'yyyy-MM-dd')}&endDate=${format(monthEnd, 'yyyy-MM-dd')}`);
       if (response.ok) {
         return await response.json();
       }
       return [];
     },
-    enabled: user?.role === 'student' && !!user?.studentId
+    enabled: !!viewedStudentId
   });
 
   // Get attendance for entire year for insights
   const yearStart = startOfYear(new Date());
   const yearEnd = new Date();
   const { data: yearAttendance = [] } = useQuery({
-    queryKey: ["student-attendance-year", user?.studentId, format(yearStart, 'yyyy-MM-dd'), format(yearEnd, 'yyyy-MM-dd')],
+    queryKey: ["student-attendance-year", viewedStudentId, format(yearStart, 'yyyy-MM-dd'), format(yearEnd, 'yyyy-MM-dd')],
     queryFn: async () => {
-      const response = await apiRequest("GET", `/api/student-attendance?studentId=${user?.studentId}&startDate=${format(yearStart, 'yyyy-MM-dd')}&endDate=${format(yearEnd, 'yyyy-MM-dd')}`);
+      const response = await apiRequest("GET", `/api/student-attendance?studentId=${viewedStudentId}&startDate=${format(yearStart, 'yyyy-MM-dd')}&endDate=${format(yearEnd, 'yyyy-MM-dd')}`);
       if (response.ok) {
         return await response.json();
       }
       return [];
     },
-    enabled: user?.role === 'student' && !!user?.studentId
+    enabled: !!viewedStudentId
   });
 
-  if (user?.role !== 'student') {
+  if (user?.role !== "student" && user?.role !== "parent") {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">

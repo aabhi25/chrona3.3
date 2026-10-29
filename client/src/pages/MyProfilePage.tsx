@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useViewedStudentId } from "@/hooks/useViewedStudentId";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -27,6 +28,7 @@ import TeacherMyProfile from "./TeacherMyProfile";
 
 export default function MyProfilePage() {
   const { user } = useAuth();
+  const viewedStudentId = useViewedStudentId();
   const [, setLocation] = useLocation();
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
@@ -37,41 +39,41 @@ export default function MyProfilePage() {
 
   // Student profile logic below
   const { data: studentDetails, isLoading: loadingStudentDetails } = useQuery({
-    queryKey: ["student-details", user?.studentId],
+    queryKey: ["student-details", viewedStudentId],
     queryFn: async () => {
-      const response = await apiRequest("GET", `/api/students/${user?.studentId}`);
+      const response = await apiRequest("GET", `/api/students/${viewedStudentId}`);
       return await response.json();
     },
-    enabled: user?.role === 'student' && !!user?.studentId
+    enabled: !!viewedStudentId
   });
 
   const { data: parentsData = [] } = useQuery({
-    queryKey: ["student-parents", user?.studentId],
+    queryKey: ["student-parents", viewedStudentId],
     queryFn: async () => {
-      const response = await apiRequest("GET", `/api/students/${user?.studentId}/parents`);
+      const response = await apiRequest("GET", `/api/students/${viewedStudentId}/parents`);
       if (response.ok) {
         return await response.json();
       }
       return [];
     },
-    enabled: user?.role === 'student' && !!user?.studentId
+    enabled: !!viewedStudentId
   });
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
   const { data: attendanceData = [] } = useQuery({
-    queryKey: ["student-attendance-month", user?.studentId, format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd')],
+    queryKey: ["student-attendance-month", viewedStudentId, format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd')],
     queryFn: async () => {
-      const response = await apiRequest("GET", `/api/student-attendance?studentId=${user?.studentId}&startDate=${format(monthStart, 'yyyy-MM-dd')}&endDate=${format(monthEnd, 'yyyy-MM-dd')}`);
+      const response = await apiRequest("GET", `/api/student-attendance?studentId=${viewedStudentId}&startDate=${format(monthStart, 'yyyy-MM-dd')}&endDate=${format(monthEnd, 'yyyy-MM-dd')}`);
       if (response.ok) {
         return await response.json();
       }
       return [];
     },
-    enabled: user?.role === 'student' && !!user?.studentId
+    enabled: !!viewedStudentId
   });
 
-  if (user?.role !== 'student') {
+  if (user?.role !== "student" && user?.role !== "parent") {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">

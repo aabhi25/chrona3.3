@@ -96,6 +96,7 @@ function Router() {
   const isSchoolAdmin = user?.role === "admin";
   const isStudent = user?.role === "student";
   const isTeacher = user?.role === "teacher";
+  const isParent = user?.role === "parent";
 
   return (
     <Layout>
@@ -160,6 +161,11 @@ function Router() {
         {isStudent && <Route path="/my-attendance" component={StudentAttendancePage} />}
         {isStudent && <Route path="/my-class" component={MyClassPage} />}
         {isStudent && <Route path="/my-profile" component={MyProfilePage} />}
+
+        {/* Parent pages - the same student pages, showing their child */}
+        {isParent && <Route path="/my-attendance" component={StudentAttendancePage} />}
+        {isParent && <Route path="/my-class" component={MyClassPage} />}
+        {isParent && <Route path="/my-profile" component={MyProfilePage} />}
         
         {/* Teacher only pages */}
         {isTeacher && <Route path="/my-class" component={TeacherMyClassesPage} />}

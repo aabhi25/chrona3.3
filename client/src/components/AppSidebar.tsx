@@ -120,7 +120,9 @@ const getNavigationItems = (userRole: string | undefined): NavigationItem[] => {
   if (userRole === "parent") {
     return [
       { id: "dashboard", path: "/", icon: LayoutDashboard, label: "Home" },
-      { id: "my-profile", path: "/my-profile", icon: User, label: "My Profile" },
+      { id: "attendance", path: "/my-attendance", icon: ClipboardCheck, label: "Child's Attendance" },
+      { id: "my-class", path: "/my-class", icon: Users, label: "Child's Class" },
+      { id: "my-profile", path: "/my-profile", icon: User, label: "Child's Profile" },
     ];
   }
 
